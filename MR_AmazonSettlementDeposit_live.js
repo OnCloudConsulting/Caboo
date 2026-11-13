@@ -50,7 +50,7 @@ define(['N/file', 'N/search', 'N/query', 'N/record', 'N/runtime', 'N/email', 'N/
         // ================================================================ CONFIG
         // Hardcoded settings. Replace each null (TODO) with the internal id.
         const CONFIG = {
-            dryRun: true,             // true = build and report the deposit array, save nothing
+            dryRun: false,            // LIVE: creates deposits. Set true to build and report without saving
             folderPending: 23183,     // File Cabinet folder: Pending
             folderProcessed: 23184,   // File Cabinet folder: Processed
             folderFailed: 23185,      // File Cabinet folder: Failed
@@ -66,7 +66,7 @@ define(['N/file', 'N/search', 'N/query', 'N/record', 'N/runtime', 'N/email', 'N/
             },
             feeItems: [1380, 1327, 1309], // FarApp fee items: Overpaid Fees Adjustment, X001IJUCWT, X001IK43CD
             currency: 'USD',
-            maxLines: 4000,           // max payment lines per deposit
+            maxLines: 8000,           // max payment lines per deposit (21,277 lines -> 3 deposits, ~7,093 each)
             customForm: 220,          // deposit form used for initialization
             bucketSize: 200,          // orders per map bucket (one SuiteQL each)
             classId: 2,               // D2C : Amazon Seller Central (other / cash back lines)
