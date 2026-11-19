@@ -13,6 +13,11 @@
  * - Parses the Amazon V2 settlement flat file (tab delimited).
  * - Matches every Amazon order ID to FarApp cash sales / cash refunds in NetSuite
  *   (by order ID, NOT by FarApp's settlement tag).
+ * - Selects only what THIS file settles for each order:
+ *     order-import cash sale   -> needs an Order / ItemPrice / Principal line
+ *     customer refund          -> needs a Refund line
+ *     settlement OrdMod        -> always (fees / reimbursements of this settlement)
+ *   Anything else stays in Undeposited Funds for the settlement that pays it.
  * - Builds one or more deposits (split by max payment lines) whose combined total
  *   equals the settlement total-amount to the cent. Memo: "AMZ STL <id> (n)".
  * - Differences are posted as Other Deposits (+) / Cash Back (-) to mapped accounts.
@@ -184,7 +189,11 @@ define(['N/file', 'N/search', 'N/query', 'N/record', 'N/runtime', 'N/email', 'N/
 
                 if (ORDER_RE.test(oid)) {
                     const o = orders[oid] || (orders[oid] = { id: oid, net: 0, fba: 0, comm: 0, refComm: 0,
-                        reimbOnly: true, shippingOnly: true, paidUnits: 0, hasAmount: false });
+                        reimbOnly: true, shippingOnly: true, paidUnits: 0, hasAmount: false,
+                        hasSale: false, hasRefund: false });
+                    // What Amazon actually settled for this order in THIS file
+                    if (tt === 'Order' && at === 'ItemPrice' && ad === 'Principal' && amt !== 0) o.hasSale = true;
+                    if (tt === 'Refund' && amt !== 0) o.hasRefund = true;
                     o.hasAmount = o.hasAmount || amt !== 0;
                     o.reimbOnly = o.reimbOnly && tt === 'other-transaction' && at === 'FBA Inventory Reimbursement';
                     const shipping = (at === 'ItemPrice' && ['Shipping', 'ShippingTax'].includes(ad)) ||
@@ -298,6 +307,17 @@ define(['N/file', 'N/search', 'N/query', 'N/record', 'N/runtime', 'N/email', 'N/
                 return !m || m[1] === settlementId;
             };
             let undep = txns.filter((t) => !t.depId && forThisSettlement(t));
+            // Select only what this file settles: order-import cash sales need an Order/Principal
+            // line, customer refunds need a Refund line. Settlement-generated OrdMods always qualify.
+            const isSettlementTxn = (t) => ORDMOD_RE.test(t.extid);
+            const isCustomerRefund = (t) => /-CashRefund-/.test(t.extid);
+            const settledHere = (t) => {
+                if (t.type === 'CashSale' && !isSettlementTxn(t)) return o.hasSale;
+                if (isCustomerRefund(t)) return o.hasRefund;
+                return true;
+            };
+            const notInFile = undep.filter((t) => !settledHere(t));
+            undep = undep.filter(settledHere);
             // A reimbursement is a settlement-generated order modification.
             // Match the complete external ID so a merchandise sale cannot satisfy it.
             if (o.reimbOnly) {
@@ -322,6 +342,7 @@ define(['N/file', 'N/search', 'N/query', 'N/record', 'N/runtime', 'N/email', 'N/
                 code: 'MATCH',
                 acct: null
             };
+            if (notInFile.length) res.docs += ` | not in this file: ${notInFile.map((t) => t.tranid).join(' ')}`;
             const review = (reason) => Object.assign(res, { code: 'REVIEW_REQUIRED', reason,
                 pay: [], ns: 0, acct: null, diff: 0 });
             if (o.shippingOnly && o.net === 0) { res.code = 'SHIPPING_OFFSET'; return res; }
@@ -991,7 +1012,7 @@ define(['N/file', 'N/search', 'N/query', 'N/record', 'N/runtime', 'N/email', 'N/
                 const counts = {};
                 results.forEach((r) => { counts[r.code] = (counts[r.code] || 0) + 1; });
                 const csv = [['amazon_order', 'result', 'amazon_paid', 'ns_undeposited', 'difference', 'deposit_account', 'ns_documents'].join(',')];
-                results.filter((r) => r.code !== 'MATCH').forEach((r) => {
+                results.filter((r) => r.code !== 'MATCH' || r.docs.indexOf('not in this file') !== -1).forEach((r) => {
                     csv.push([r.order, r.code, fmt(r.amazon), fmt(r.ns), fmt(r.diff), r.acct || '', r.docs].map(csvCell).join(','));
                 });
                 const csvId = writeTextFile(`${h.settlementId}${tag}_exceptions.csv`, csv.join('\n'), p.folderProcessed, file.Type.CSV);
